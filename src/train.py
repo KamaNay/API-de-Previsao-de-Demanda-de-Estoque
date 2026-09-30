@@ -25,10 +25,10 @@ FEATURE_COLUMNS = [
     "rolling_mean_7", "rolling_mean_14",
 ]
 
-def prepare_categorical(df):
+def prepare_categorical(df, store_categories, item_categories):
     df = df.copy()
-    df["store"] = df["store"].astype("category")
-    df["item"] = df["item"].astype("category")
+    df["store"] = df["store"].astype(pd.CategoricalDtype(categories=store_categories))
+    df["item"] = df["item"].astype(pd.CategoricalDtype(categories=item_categories))
     return df
 
 def naive_baseline_predictions(test_df):
@@ -43,46 +43,58 @@ def evaluate(y_true, y_pred, label):
     
     return mae, rmse
     
-def train_xgboost(X_train, y_train, X_test, y_test):
-    model = xgb.XGBRegressor(
-        n_estimators=500,     
-        max_depth=7,          
-        learning_rate=0.05,
-        tree_method="hist",
-        enable_categorical=True, 
-        random_state=42,
+def train_xgboost_native(X_train, y_train):
+    dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
+    
+    params = {
+        "max_depth": 7,
+        "eta": 0.05,               
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "tree_method": "hist",
+        "objective": "reg:squarederror",
+        "seed": 42,
+    }
+    
+    bst = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=500,
     )
-    model.fit(X_train, y_train)
-    return model
+    return bst
 
-def save_model(model, feature_columns, test_start, path):
+def save_model(model, feature_columns, test_start, path, store_categories, item_categories):
     bundle = {
         "model": model,
         "feature_columns": feature_columns,
         "test_start": test_start,
+        "categories": {"store": store_categories, "item": item_categories},
     }
     joblib.dump(bundle, path)
     
 def main():
     df = pd.read_csv(DATA_PATH, parse_dates=["date"])
     df = build_feature_frame(df)
+    
+    store_categories = sorted(df["store"].unique())
+    item_categories = sorted(df["item"].unique())
+    
     train, test = split_train_test(df, TEST_START)
     
-    train = prepare_categorical(train)
-    test = prepare_categorical(test)
+    train = prepare_categorical(train, store_categories, item_categories)
+    test = prepare_categorical(test, store_categories, item_categories)
     
     x_train = train[FEATURE_COLUMNS]
     y_train = train["sales"]
     x_test = test[FEATURE_COLUMNS]
-    y_test = test["sales"]
     
-    model = train_xgboost(x_train, y_train, x_test, y_test)
-    save_model(model, FEATURE_COLUMNS, TEST_START, ARTIFACTS_PATH / "model.pkl")
+    model = train_xgboost_native(x_train, y_train)
+    save_model(model, FEATURE_COLUMNS, TEST_START, ARTIFACTS_PATH / "model.pkl", store_categories, item_categories)
     
     # --- Baseline ---
     test["naive_pred"] = naive_baseline_predictions(test)
     maeB, rmseB = evaluate(test["sales"], test["naive_pred"], "Baseline")
-    maeXG, rmseXG = evaluate(test["sales"], model.predict(x_test), "XGBoost")
+    maeXG, rmseXG = evaluate(test["sales"], model.predict(xgb.DMatrix(x_test, enable_categorical=True)), "XGBoost")
     
     with open(ARTIFACTS_PATH / "metrics.json", "w") as metrics_file:
         json.dump(
