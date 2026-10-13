@@ -20,5 +20,6 @@ def build_prediction_row(history_df, store, item, prediction_date):
 
     combined = pd.concat([history_df, new_row], ignore_index=True)
     combined = build_feature_frame(combined)
+    combined["date"] = pd.to_datetime(combined["date"])
 
     return combined.tail(1)
