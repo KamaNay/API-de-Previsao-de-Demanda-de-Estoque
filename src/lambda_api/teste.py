@@ -18,7 +18,7 @@ train_row = full[(full["store"] == STORE) & (full["item"] == ITEM) & (full["date
 
 # Caminho da Lambda: histórico só até o dia ANTERIOR ao alvo
 history = get_sales_history(get_engine(), STORE, ITEM, TARGET_DATE - pd.Timedelta(days=1))
-lambda_row = build_prediction_row(history, STORE, ITEM, TARGET_DATE)
+lambda_row = build_prediction_row(history, STORE, ITEM, TARGET_DATE.date())
 
 cols = joblib.load(Path(__file__).parent.parent.parent / "artifacts" / "model.pkl")["feature_columns"]
 
