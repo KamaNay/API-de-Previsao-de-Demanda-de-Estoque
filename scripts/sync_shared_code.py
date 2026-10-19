@@ -1,8 +1,13 @@
 import shutil
 from pathlib import Path
 
-SRC = Path(__file__).parent.parent / "src" / "features.py"
-DEST = Path(__file__).parent.parent / "src" / "lambda_api" / "features.py"
+ROOT = Path(__file__).parent.parent
 
-shutil.copy(SRC, DEST)  # qual função do módulo shutil copia um arquivo?
-print(f"{SRC.name} copiado para {DEST.parent}")
+FILES = [
+    (ROOT / "src" / "features.py", ROOT / "src" / "lambda_api" / "features.py"),
+    (ROOT / "artifacts" / "model.pkl", ROOT / "src" / "lambda_api" / "model.pkl"),
+]
+
+for src, dest in FILES:
+    shutil.copy(src, dest)
+    print(f"{src.name} copiado para {dest.parent}")
