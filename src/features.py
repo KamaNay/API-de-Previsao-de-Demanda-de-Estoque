@@ -1,5 +1,8 @@
 LAGS = [7, 14, 365]
 
+HISTORY_DAYS = max(LAGS)
+
+
 def add_calendar_features(df):
     df = df.copy()
     df["day_of_week"] = df["date"].dt.dayofweek
@@ -47,5 +50,7 @@ def build_feature_frame(df):
     df = add_rolling_features(df)
 
     # Uma linha de código que remove as linhas com NaN nas colunas de feature (dica: dropna tem um parâmetro subset).
-    df = df.dropna(subset=[col for col in df.columns if col.startswith(("lag_", "rolling_"))])
+    df = df.dropna(
+        subset=[col for col in df.columns if col.startswith(("lag_", "rolling_"))]
+    )
     return df
