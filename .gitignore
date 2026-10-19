@@ -220,3 +220,4 @@ __marimo__/
 .streamlit/secrets.toml
 
 src/lambda_api/features.py
+src/lambda_api/model.pkl
