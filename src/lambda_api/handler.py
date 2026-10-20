@@ -4,8 +4,9 @@ from pathlib import Path
 import joblib
 import pandas as pd
 import xgboost as xgb
-from db import get_connection, get_sales_history, get_simulated_date
+from db import DatabaseUnavailableError, get_sales_history, get_simulated_date
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from inference import build_prediction_row
 from mangum import Mangum
 from schemas import PredictionRequest, PredictionResponse
@@ -24,21 +25,31 @@ item_categories = bundle["categories"]["item"]
 store_dtype = pd.api.types.CategoricalDtype(categories=store_categories)
 item_dtype = pd.api.types.CategoricalDtype(categories=item_categories)
 
-conn = get_connection()
-
 app = FastAPI()
 
+@app.exception_handler(DatabaseUnavailableError)
+def database_unavailable_handler(request, exc):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database is unavailable."}
+    )
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(request: PredictionRequest):
     if request.store not in store_categories or request.item not in item_categories:
         raise HTTPException(status_code=422, detail="Store and item must be valid.")
 
-    simulated_date = get_simulated_date(conn)
+    simulated_date = get_simulated_date()
+    
+    if simulated_date is None:
+        raise HTTPException(
+            status_code=500, detail="Simulated date not found in the database."
+        )
+    
     prediction_date = simulated_date + timedelta(days=1)
 
     history = get_sales_history(
-        conn, request.store, request.item, simulated_date, HISTORY_DAYS
+        request.store, request.item, simulated_date, HISTORY_DAYS
     )
 
     if history.empty:
