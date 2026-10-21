@@ -4,7 +4,7 @@ joblib==1.6.0
 mangum==0.22.0
 numpy==2.5.3
 pandas==3.0.5
-psycopg2==2.9.13
+psycopg2-binary==2.9.13
 python-dotenv==1.2.4
 scipy==1.18.1
-xgboost==3.4.1
+xgboost-cpu==3.4.1
