@@ -221,3 +221,5 @@ __marimo__/
 
 src/lambda_api/features.py
 src/lambda_api/model.pkl
+
+build/
