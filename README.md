@@ -13,7 +13,7 @@ Dataset: [Store Item Demand Forecasting Challenge](https://www.kaggle.com/c/dema
 | Banco de dados (Supabase) e trigger de sincronização | Concluído |
 | API de inferência, validada localmente | Concluída |
 | Empacotamento para AWS Lambda (layer + função) | Concluído |
-| Deploy na AWS Lambda | Em andamento |
+| Deploy na AWS Lambda (Function URL protegida por chave de API) | Concluído |
 | Automação diária (EventBridge + segunda Lambda) | Pendente |
 | Dashboard de monitoramento do modelo (Power BI) | Pendente |
 
@@ -254,7 +254,6 @@ Gera `build/layer.zip` (dependências para Linux e Python 3.12) e `build/functio
 
 ## Próximos passos
 
-- Deploy na AWS Lambda (layer pelo S3, função com Function URL e chave de API).
 - Lambda de automação diária com EventBridge.
 - Dashboard no Power BI conectado ao Supabase, com previsto contra real e MAE/RMSE ao longo do tempo.
 - Exportar o schema do banco para `sql/schema.sql` no repositório.
