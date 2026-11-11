@@ -1,40 +1,57 @@
 from datetime import date
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PredictionRequest(BaseModel):
-    # loja e item
     store: int
     item: int
 
 
 class PredictionResponse(BaseModel):
-    # loja, item, data prevista e previsão de demanda
     store: int
     item: int
     prediction_date: date
     demand_forecast: float
-    
+
+
 class BatchPredictionRequest(BaseModel):
-    # lista de lojas e itens
-    series: list[PredictionRequest] = Field(min_length=1, max_length=1000, description="Lista de lojas e itens para previsão de demanda")
-    
+    series: list[PredictionRequest] = Field(
+        min_length=1,
+        max_length=1000,
+        description="Lista de lojas e itens para previsão de demanda",
+    )
+
+    @model_validator(mode="after")
+    def reject_duplicate_series(self):
+        pairs = [(s.store, s.item) for s in self.series]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("series must not contain duplicate (store, item) pairs")
+        return self
+
+
 class SeriesPrediction(BaseModel):
-    # loja, item, data prevista e previsão de demanda
     store: int
     item: int
-    prediction_date: date
     demand_forecast: float
-    
+
+
+SeriesErrorReason = Literal[
+    "unknown_category",
+    "empty_history",
+    "incomplete_history",
+    "feature_row_mismatch",
+]
+
+
 class SeriesError(BaseModel):
-    # loja, item e mensagem de erro
     store: int
     item: int
-    error_message: str
-    
+    reason: SeriesErrorReason
+
+
 class BatchPredictionResponse(BaseModel):
-    # lista de previsões
     prediction_date: date
     predictions: list[SeriesPrediction]
-    errors: list[SeriesError] = []
+    errors: list[SeriesError] = Field(default_factory=list)
