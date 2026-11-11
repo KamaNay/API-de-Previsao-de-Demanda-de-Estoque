@@ -14,12 +14,14 @@ load_dotenv(ENV_PATH)
 _conn = None
 _logger = logging.getLogger(__name__)
 
+
 def get_connection():
     global _conn
     if _conn is None or _conn.closed:
         _conn = psycopg2.connect(os.getenv("DATABASE_URL"), connect_timeout=5)
         _conn.autocommit = True
     return _conn
+
 
 def reset_connection():
     global _conn
@@ -29,10 +31,12 @@ def reset_connection():
         except psycopg2.Error:
             _logger.exception("Failed to close database connection")
     _conn = None
-    
+
+
 class DatabaseUnavailableError(Exception):
     pass
-    
+
+
 def fetch_all(query, params=None):
     for attempt in range(3):
         try:
@@ -41,11 +45,16 @@ def fetch_all(query, params=None):
                 cur.execute(query, params)
                 return cur.fetchall()
         except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-            _logger.warning(f"Database connection error: {e}. Attempt {attempt + 1} of 3.")
+            _logger.warning(
+                f"Database connection error: {e}. Attempt {attempt + 1} of 3."
+            )
             reset_connection()
             if attempt == 2:
-                raise DatabaseUnavailableError("Database is unavailable after 3 attempts.") from e
-            
+                raise DatabaseUnavailableError(
+                    "Database is unavailable after 3 attempts."
+                ) from e
+
+
 def get_simulated_date():
     query = "SELECT simulated_date FROM sim_state WHERE id = %s"
     rows = fetch_all(query, (1,))
@@ -63,6 +72,35 @@ def get_sales_history(store, item, simulated_date, history_days=HISTORY_DAYS):
 
     rows = fetch_all(query, (store, item, simulated_date, history_days))
     df = pd.DataFrame(rows, columns=["store", "item", "date", "sales"])
+    df["date"] = pd.to_datetime(df["date"])
+    df["sales"] = df["sales"].astype(float)
+    return df
+
+
+def get_sales_history_batch(pairs, simulated_date, history_days=HISTORY_DAYS):
+
+    columns = ["store", "item", "date", "sales"]
+
+    if not pairs:
+        return pd.DataFrame(columns=columns)
+
+    query = """
+        SELECT store, item, sale_date, sale
+        FROM (
+            SELECT store, item, sale_date, sale,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY store, item
+                       ORDER BY sale_date DESC
+                   ) AS rn
+            FROM sales_history
+            WHERE (store, item) IN %s
+              AND sale_date <= %s
+        ) t
+        WHERE rn <= %s
+    """
+
+    rows = fetch_all(query, (tuple(pairs), simulated_date, history_days))
+    df = pd.DataFrame(rows, columns=columns)
     df["date"] = pd.to_datetime(df["date"])
     df["sales"] = df["sales"].astype(float)
     return df
