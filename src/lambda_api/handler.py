@@ -7,12 +7,24 @@ from pathlib import Path
 import joblib
 import pandas as pd
 import xgboost as xgb
-from db import DatabaseUnavailableError, get_sales_history, get_simulated_date
+from db import (
+    DatabaseUnavailableError,
+    get_sales_history,
+    get_sales_history_batch,
+    get_simulated_date,
+)
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
-from inference import build_prediction_row
+from inference import build_prediction_row, build_prediction_rows, split_valid_pairs
 from mangum import Mangum
-from schemas import PredictionRequest, PredictionResponse
+from schemas import (
+    BatchPredictionRequest,
+    BatchPredictionResponse,
+    PredictionRequest,
+    PredictionResponse,
+    SeriesError,
+    SeriesPrediction,
+)
 
 from features import HISTORY_DAYS
 
@@ -28,6 +40,8 @@ item_categories = bundle["categories"]["item"]
 
 store_dtype = pd.api.types.CategoricalDtype(categories=store_categories)
 item_dtype = pd.api.types.CategoricalDtype(categories=item_categories)
+store_set = set(store_categories)
+item_set = set(item_categories)
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +68,12 @@ def predict(request: PredictionRequest):
         raise HTTPException(status_code=422, detail="Store and item must be valid.")
 
     simulated_date = get_simulated_date()
-    
+
     if simulated_date is None:
         raise HTTPException(
             status_code=500, detail="Simulated date not found in the database."
         )
-    
+
     prediction_date = simulated_date + timedelta(days=1)
 
     history = get_sales_history(
@@ -105,6 +119,75 @@ def predict(request: PredictionRequest):
         item=request.item,
         prediction_date=prediction_date,
         demand_forecast=float(prediction),
+    )
+
+
+def predict_from_rows(rows):
+    """Prevê para as linhas já preparadas e devolve uma lista de SeriesPrediction."""
+    if rows.empty:
+        return []
+
+    rows = rows.copy()
+    rows["store"] = rows["store"].astype(store_dtype)
+    rows["item"] = rows["item"].astype(item_dtype)
+
+    dmatrix = xgb.DMatrix(rows[feature_columns], enable_categorical=True)
+    values = model.predict(dmatrix)
+
+    # store e item vêm da própria linha prevista, então a previsão nunca troca de série
+    return [
+        SeriesPrediction(store=int(store), item=int(item), demand_forecast=float(value))
+        for store, item, value in zip(rows["store"], rows["item"], values)
+    ]
+
+
+@app.post(
+    "/predict/batch",
+    response_model=BatchPredictionResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def predict_batch(request: BatchPredictionRequest):
+    pairs = [(s.store, s.item) for s in request.series]
+
+    # 1. Categoria desconhecida: separa ANTES de ir ao banco
+    known = [(s, i) for s, i in pairs if s in store_set and i in item_set]
+    known_set = set(known)
+    errors = [
+        SeriesError(store=s, item=i, reason="unknown_category")
+        for s, i in pairs
+        if (s, i) not in known_set
+    ]
+
+    # 2. Data simulada
+    simulated_date = get_simulated_date()
+    if simulated_date is None:
+        raise HTTPException(
+            status_code=500, detail="Simulated date not found in the database."
+        )
+    prediction_date = simulated_date + timedelta(days=1)
+
+    # 3. Histórico em lote e validação por série
+    history = get_sales_history_batch(known, simulated_date, HISTORY_DAYS)
+    valid, history_errors = split_valid_pairs(history, known, simulated_date, HISTORY_DAYS)
+    errors += [SeriesError(store=s, item=i, reason=r) for s, i, r in history_errors]
+
+    # 4. Features e previsão
+    rows = build_prediction_rows(history, valid, prediction_date)
+    predictions = predict_from_rows(rows)
+
+    # pares que passaram na validação mas não voltaram das features
+    returned = {(p.store, p.item) for p in predictions}
+    errors += [
+        SeriesError(store=s, item=i, reason="feature_row_mismatch")
+        for s, i in valid
+        if (s, i) not in returned
+    ]
+
+    # 5. Mesmo formato de resposta sempre (200), mesmo que nenhuma série dê certo
+    return BatchPredictionResponse(
+        prediction_date=prediction_date,
+        predictions=predictions,
+        errors=errors,
     )
 
 
