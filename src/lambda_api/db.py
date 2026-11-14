@@ -11,8 +11,13 @@ from features import HISTORY_DAYS
 ENV_PATH = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
+HISTORY_COLUMNS = ["store", "item", "date", "sales"]
+
 _conn = None
 _logger = logging.getLogger(__name__)
+
+class DatabaseUnavailableError(Exception):
+    pass
 
 
 def get_connection():
@@ -31,10 +36,6 @@ def reset_connection():
         except psycopg2.Error:
             _logger.exception("Failed to close database connection")
     _conn = None
-
-
-class DatabaseUnavailableError(Exception):
-    pass
 
 
 def fetch_all(query, params=None):
@@ -61,6 +62,13 @@ def get_simulated_date():
     return rows[0][0] if rows else None
 
 
+def _to_history_frame(rows):
+    df = pd.DataFrame(rows, columns=HISTORY_COLUMNS)
+    df["date"] = pd.to_datetime(df["date"])
+    df["sales"] = df["sales"].astype(float)
+    return df
+
+
 def get_sales_history(store, item, simulated_date, history_days=HISTORY_DAYS):
     query = """
         SELECT store, item, sale_date, sale
@@ -71,18 +79,16 @@ def get_sales_history(store, item, simulated_date, history_days=HISTORY_DAYS):
     """
 
     rows = fetch_all(query, (store, item, simulated_date, history_days))
-    df = pd.DataFrame(rows, columns=["store", "item", "date", "sales"])
-    df["date"] = pd.to_datetime(df["date"])
-    df["sales"] = df["sales"].astype(float)
-    return df
+    return _to_history_frame(rows)
 
 
 def get_sales_history_batch(pairs, simulated_date, history_days=HISTORY_DAYS):
-
-    columns = ["store", "item", "date", "sales"]
-
+    """
+    Histórico de várias séries numa única consulta.
+    pairs: lista de tuplas (store, item). Devolve até history_days dias por série.
+    """
     if not pairs:
-        return pd.DataFrame(columns=columns)
+        return _to_history_frame([])
 
     query = """
         SELECT store, item, sale_date, sale
@@ -100,7 +106,4 @@ def get_sales_history_batch(pairs, simulated_date, history_days=HISTORY_DAYS):
     """
 
     rows = fetch_all(query, (tuple(pairs), simulated_date, history_days))
-    df = pd.DataFrame(rows, columns=columns)
-    df["date"] = pd.to_datetime(df["date"])
-    df["sales"] = df["sales"].astype(float)
-    return df
+    return _to_history_frame(rows)
