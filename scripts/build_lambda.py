@@ -44,7 +44,7 @@ def build_function():
     FILES = [SRC / f for f in FUNCTION_FILES]
     staging = BUILD / "function_staging"
     shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
+    staging.mkdir(parents=True, exist_ok=True)  # OneDrive/Windows pode demorar a liberar a pasta após rmtree
     for f in FILES:
         shutil.copy(f, staging)
         
@@ -66,7 +66,7 @@ LIMIT_MB = 250
 if __name__ == "__main__":
     BUILD.mkdir(exist_ok=True)
     run_sync()
-    build_layer()
+    #build_layer()
     build_function()
 
     layer_mb = folder_size_mb(BUILD / "layer")
