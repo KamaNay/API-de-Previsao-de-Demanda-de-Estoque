@@ -159,7 +159,7 @@ O histórico precisa ter exatamente 365 dias consecutivos terminando na data sim
 - **Modelo exportado como bundle** (`model`, `feature_columns`, `test_start` e `categories`), para qualquer ambiente saber quais colunas usar e em qual ordem.
 
 **Engenharia**
-- **Uma única fonte para o código de features.** `src/features.py` é usado no treino e na API. Um script (`scripts/sync_shared_code.py`) copia o arquivo para a pasta da Lambda, e a cópia nunca é editada à mão. Isso evita o desvio entre treino e produção. Um teste de paridade confirmou que a linha de features montada pela API, para um dia que existe no CSV, é idêntica à calculada pelo pipeline de treino.
+- **Uma única fonte para o código de features.** `src/features.py` é usado no treino e na API. Um script (`scripts/sync_shared_code.py`) copia o arquivo para a pasta da Lambda, e a cópia nunca é editada à mão. Isso evita o desvio entre treino e produção. Testes automatizados (`tests/test_features.py`) garantem que a linha de features montada pela API é idêntica à calculada pelo pipeline de treino, que lags e médias móveis nunca cruzam de uma série para outra nem incluem o dia previsto, e que a validação de séries recusa histórico vazio ou incompleto.
 - **Janela de histórico derivada dos lags.** `HISTORY_DAYS = max(LAGS)` mora em `features.py` e é usado pela query, pela validação e pelo cálculo, então mudar um lag não deixa os três desencontrados.
 - **Conexão com o banco tolerante a falhas.** `autocommit` (a API só lê), reabertura da conexão e até 3 tentativas apenas para erros de conexão. Um erro de SQL não é repetido, porque falharia do mesmo jeito. A falha final vira um erro próprio que a API traduz em 503, sem vazar detalhes internos.
 - **Pooler do Supabase em modo transaction.** A conexão direta do plano gratuito usa IPv6, e uma Lambda fora de VPC só tem saída IPv4. O pooler compartilhado é IPv4 e gratuito.
@@ -174,6 +174,8 @@ O histórico precisa ter exatamente 365 dias consecutivos terminando na data sim
 ## Como rodar
 
 **1. Ambiente e treino**
+
+Baixe o `train.csv` no [Kaggle](https://www.kaggle.com/c/demand-forecasting-kernels-only) e coloque em `data/` (o arquivo não é versionado).
 
 ```bash
 python -m venv .venv
@@ -216,12 +218,21 @@ python scripts/build_lambda.py
 
 Gera `build/layer.zip` (dependências para Linux e Python 3.12) e `build/function.zip` (código e modelo). O script falha se o total passar do limite de 250 MB da Lambda. Tamanhos atuais: layer de cerca de 224 MB descompactado (70 MB de zip) e função de cerca de 6 MB, total de aproximadamente 230 MB.
 
+**5. Testes**
+
+```bash
+pip install pytest
+pytest -q
+```
+
+Os testes rodam sem banco, sem rede e sem o modelo. O CI (`.github/workflows/ci.yml`) roda `ruff` e `pytest` a cada push.
+
 ## Estrutura do projeto
 
 ```
 .
 ├── data/
-│   └── train.csv                    # dataset bruto (não versionado)
+│   └── train.csv                    # dataset bruto (baixar do Kaggle, não versionado)
 ├── notebooks/
 │   └── 01_eda.ipynb                 # análise exploratória
 ├── src/
@@ -239,9 +250,12 @@ Gera `build/layer.zip` (dependências para Linux e Python 3.12) e `build/functio
 │   ├── sync_shared_code.py          # copia features.py e model.pkl para a Lambda
 │   └── build_lambda.py              # gera layer.zip e function.zip
 ├── artifacts/
-│   ├── model.pkl                    # modelo e metadados (não versionado)
+│   ├── model.pkl                    # modelo e metadados (versionado: é o que vai para a Lambda)
 │   └── metrics.json                 # métricas de avaliação
 ├── requirements.txt                 # ambiente de desenvolvimento
+├── tests/
+│   └── test_features.py             # features, paridade treino/API e validação de séries
+├── pytest.ini
 ├── requirements-lambda.txt          # dependências da Lambda
 └── README.md
 ```
@@ -250,11 +264,11 @@ Gera `build/layer.zip` (dependências para Linux e Python 3.12) e `build/functio
 
 - O modelo não é retreinado conforme a simulação avança. Como `year` é uma feature e o treino só viu 2013–2017, as previsões para 2018 em diante tratam o ano como o mais recente já visto.
 - A venda "real" da simulação diária será gerada sinteticamente, então o monitoramento de acurácia no banco mostra o funcionamento do fluxo, e não o desempenho em dados de produção reais.
-- O teste de paridade de features cobre uma data e uma série. Testes automatizados da API ainda não foram escritos.
+- Os testes cobrem as features e a validação de séries. O endpoint HTTP e a reabertura de conexão com o banco ainda não têm testes.
 
 ## Próximos passos
 
 - Lambda de automação diária com EventBridge.
 - Dashboard no Power BI conectado ao Supabase, com previsto contra real e MAE/RMSE ao longo do tempo.
 - Exportar o schema do banco para `sql/schema.sql` no repositório.
-- Testes automatizados da API (incluindo a reabertura de conexão).
+- Testes do endpoint HTTP e da reabertura de conexão com o banco.
