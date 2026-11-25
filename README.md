@@ -17,7 +17,7 @@ Dataset: [Store Item Demand Forecasting Challenge](https://www.kaggle.com/c/dema
 | Automação diária (EventBridge + segunda Lambda) | Pendente |
 | Dashboard de monitoramento do modelo (Power BI) | Pendente |
 
-A demonstração ao vivo está prevista para ficar disponível até janeiro de 2027, o limite do plano gratuito da AWS usado no projeto. Depois disso, o repositório continua reproduzível a partir do código e dos scripts de build.
+A demonstração ao vivo está prevista para ficar disponível até 21 de janeiro de 2027, quando termina o plano gratuito da AWS usado no projeto. Depois disso, o repositório continua reproduzível a partir do código e dos scripts de build.
 
 ## Resultados
 
@@ -105,6 +105,12 @@ AFTER UPDATE ON store_pred
 FOR EACH ROW
 EXECUTE FUNCTION sync_actual_sales();
 
+-- RLS ligado e sem políticas: bloqueia o acesso pela API pública do Supabase.
+-- A aplicação conecta direto no PostgreSQL como dona das tabelas.
+ALTER TABLE sales_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE store_pred ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sim_state ENABLE ROW LEVEL SECURITY;
+
 -- Estado inicial da simulação
 INSERT INTO sim_state (id, simulated_date) VALUES (1, '2017-12-31');
 ```
@@ -113,13 +119,31 @@ INSERT INTO sim_state (id, simulated_date) VALUES (1, '2017-12-31');
 
 ## API
 
-`POST /predict`
+| Endpoint | O que faz |
+|---|---|
+| `POST /predict` | Previsão do dia seguinte para uma série (loja, item) |
+| `POST /predict/batch` | Previsão do dia seguinte para até 1.000 séries numa chamada |
+
+A data prevista vem de `sim_state`, não do cliente.
+
+### Autenticação
+
+Toda requisição precisa do cabeçalho `x-api-key`, com o mesmo valor da variável de ambiente `API_KEY` do servidor. Sem o cabeçalho, com a chave errada ou sem `API_KEY` configurada no servidor, a API responde 403. A chave é comparada com `secrets.compare_digest`, para o tempo de resposta não revelar partes dela.
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "x-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"store": 1, "item": 1}'
+```
+
+### `POST /predict`
 
 ```json
 { "store": 1, "item": 1 }
 ```
 
-Resposta (a data prevista vem de `sim_state`, não do cliente):
+Resposta:
 
 ```json
 {
@@ -130,13 +154,50 @@ Resposta (a data prevista vem de `sim_state`, não do cliente):
 }
 ```
 
+### `POST /predict/batch`
+
+Recebe de 1 a 1.000 séries, sem pares repetidos. O histórico de todas é lido numa única consulta, e o modelo prevê todas de uma vez.
+
+```json
+{
+  "series": [
+    { "store": 1, "item": 1 },
+    { "store": 99, "item": 1 }
+  ]
+}
+```
+
+Uma série com problema não derruba o lote: as válidas vêm em `predictions` e as demais em `errors`, com o motivo. Com o corpo válido, o status é 200 mesmo que nenhuma série possa ser prevista, então o cliente deve sempre conferir `errors`.
+
+```json
+{
+  "prediction_date": "2018-01-01",
+  "predictions": [
+    { "store": 1, "item": 1, "demand_forecast": 12.746395111083984 }
+  ],
+  "errors": [
+    { "store": 99, "item": 1, "reason": "unknown_category" }
+  ]
+}
+```
+
+| `reason` | Significado |
+|---|---|
+| `unknown_category` | Loja ou item que o modelo não conhece |
+| `empty_history` | Nenhuma venda no banco para a série |
+| `incomplete_history` | A série não tem os 365 dias consecutivos terminando na data simulada |
+| `feature_row_mismatch` | A série passou na validação, mas a linha de features não foi gerada |
+
+### Códigos de erro
+
 | Status | Quando acontece |
 |---|---|
-| 422 | Loja ou item que o modelo não conhece; histórico vazio ou incompleto para a série |
-| 500 | `sim_state` sem a linha inicial; linha de features montada para o dia errado |
+| 403 | Chave de API ausente, inválida ou não configurada no servidor |
+| 422 | Corpo fora do formato. No lote, também lista vazia, mais de 1.000 séries ou pares repetidos. No `/predict`, também loja ou item desconhecido e histórico vazio ou incompleto |
+| 500 | `sim_state` sem a linha inicial; no `/predict`, linha de features montada para o dia errado |
 | 503 | Banco indisponível depois de 3 tentativas de conexão |
 
-O histórico precisa ter exatamente 365 dias consecutivos terminando na data simulada. Sem isso, o `lag_365` ficaria deslocado e a API responderia com a previsão de outro dia sem avisar, então ela recusa o pedido em vez de arriscar.
+O histórico precisa ter exatamente 365 dias consecutivos terminando na data simulada. Sem isso, o `lag_365` ficaria deslocado e a API responderia com a previsão de outro dia sem avisar, então ela recusa a série em vez de arriscar.
 
 ## Principais insights da análise exploratória
 
@@ -167,7 +228,7 @@ O histórico precisa ter exatamente 365 dias consecutivos terminando na data sim
 - **Credenciais só em variável de ambiente** (`DATABASE_URL`), fora do Git.
 
 **Custo**
-- **Só serviços Always Free**, sem EC2 nem RDS, que cobrariam depois do período gratuito.
+- **Arquitetura serverless, sem EC2 nem RDS**, para não manter servidor ou banco gerenciado ligado na AWS. O PostgreSQL fica no plano gratuito do Supabase.
 - **Zip + Lambda Layers em vez de imagem de container.** A imagem exigiria o Amazon ECR, que não tem camada gratuita permanente.
 - **`xgboost-cpu` no layer.** O pacote `xgboost` completo estouraria o limite de 250 MB da Lambda. O XGBoost exige o scipy em tempo de execução, então ele entra no layer.
 
@@ -198,7 +259,10 @@ Crie um arquivo `.env` na raiz com a connection string do pooler do Supabase:
 
 ```
 DATABASE_URL=postgresql://postgres.<ref-do-projeto>:<senha>@aws-0-<regiao>.pooler.supabase.com:6543/postgres
+API_KEY=<uma-chave-longa-e-aleatória>
 ```
+
+Para gerar uma chave: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
 
 **3. API local**
 
@@ -208,7 +272,7 @@ cd src/lambda_api
 uvicorn handler:app --reload
 ```
 
-A documentação interativa fica em `http://127.0.0.1:8000/docs`.
+A documentação interativa fica em `http://127.0.0.1:8000/docs`. Nela, preencha o campo `x-api-key` de cada requisição.
 
 **4. Pacote para a Lambda**
 
@@ -217,6 +281,8 @@ python scripts/build_lambda.py
 ```
 
 Gera `build/layer.zip` (dependências para Linux e Python 3.12) e `build/function.zip` (código e modelo). O script falha se o total passar do limite de 250 MB da Lambda. Tamanhos atuais: layer de cerca de 224 MB descompactado (70 MB de zip) e função de cerca de 6 MB, total de aproximadamente 230 MB.
+
+Na Lambda (Python 3.12), o handler é `handler.handler`, e `DATABASE_URL` e `API_KEY` são configuradas como variáveis de ambiente da função.
 
 **5. Testes**
 
