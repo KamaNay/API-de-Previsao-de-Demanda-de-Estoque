@@ -66,7 +66,7 @@ LIMIT_MB = 250
 if __name__ == "__main__":
     BUILD.mkdir(exist_ok=True)
     run_sync()
-    #build_layer()
+    build_layer()
     build_function()
 
     layer_mb = folder_size_mb(BUILD / "layer")
